@@ -23,12 +23,9 @@ You deploy one ansel server, then run `cargo add ansel` in every Rust service
 that handles images. Only the server knows the bucket credentials. Clients
 just make HTTP calls.
 
-```mermaid
-flowchart LR
-    app["Your app"] -- "ansel crate" --> ansel["ansel<br/><small>resize · crop · convert · strip metadata</small>"]
-    ansel -- "S3 API" --> bucket[("Railway Bucket<br/>or any S3")]
-    ansel -. "image / signed image URL" .-> app
-```
+<p align="center">
+  <img src="assets/architecture.svg" alt="Your app calls ansel through the ansel crate. Ansel stores images in a Railway Bucket or any S3-compatible store through the S3 API, and returns the image or a signed image URL to your app." width="760">
+</p>
 
 ## Contents
 
