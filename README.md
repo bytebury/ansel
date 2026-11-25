@@ -48,7 +48,8 @@ Ansel works with [Railway Storage Buckets](https://docs.railway.com/storage-buck
 without any storage configuration.
 
 1. **Create a bucket** in your Railway project.
-2. **Deploy ansel** from this repo (or its Docker image) as a new service.
+2. **Deploy ansel** from this repo as a new service. The included
+   `railway.json` builds the Dockerfile and sets `/health` as the health check.
 3. **Connect the bucket** to the ansel service. Railway adds the bucket's
    variables (`BUCKET`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`, `REGION`,
    `ENDPOINT`) to the service, and ansel reads them as they are.
@@ -114,8 +115,9 @@ let src = ansel::url(
 // https://ansel.example.com/images/01JD8Z...?w=400&h=400&fit=cover&fmt=webp&q=80&exp=…&sig=…
 ```
 
-Signed URLs expire after `ANSEL_URL_TTL` (default: 7 days). Use
-`.expires_in(Duration)` to override this for a single URL.
+Signed URLs expire after 7 days, or after `ANSEL_URL_TTL` seconds if you set
+it in the client's environment. Use `.expires_in(Duration)` to change it for a
+single URL.
 
 ### Converting without storing
 
@@ -129,12 +131,33 @@ let webp: Vec<u8> = ansel::convert(png_bytes, Transform::new().format(Format::We
 ### Other operations
 
 ```rust
-let info = ansel::get(&image.id).await?;   // metadata: dimensions, format, size, created_at
-ansel::delete(&image.id).await?;           // removes the original and all cached variants
+let info = ansel::get(&image.id).await?;                              // dimensions, format, size, created_at
+let thumb = ansel::download(&image.id, Transform::new().width(200)).await?; // the image bytes
+ansel::delete(&image.id).await?;                                      // removes the original and all cached variants
 ```
 
 If you talk to more than one server, or need control over the `reqwest::Client`,
 use `ansel::Client::new(url, token)` directly.
+
+### Macros
+
+Every operation has a macro shorthand that awaits for you. Transform
+parameters are written as `name = value`, where each name is a `Transform`
+setter:
+
+```rust
+use ansel::{Fit, Format};
+
+let image = ansel::upload!(bytes)?;
+let info = ansel::get!(image.id)?;
+let webp = ansel::convert!(png_bytes, format = Format::WebP, quality = 80)?;
+let thumb = ansel::download!(image.id, width = 200, height = 200, fit = Fit::Cover)?;
+let src = ansel::url!(image.id, width = 400, format = Format::Auto)?; // no await: no network call
+ansel::delete!(image.id)?;
+```
+
+The macros use the global client, so call `ansel::setup` first or set
+`ANSEL_URL` and `ANSEL_API_TOKEN`. Like the functions, they return a `Result`.
 
 ## API
 
@@ -181,10 +204,13 @@ curl -H "Authorization: Bearer $ANSEL_API_TOKEN" \
 
 Without query parameters, this returns the stored original. With
 [transform parameters](#transforms), the first request renders the variant and
-caches it in the bucket. Later requests are served from that cache. Image IDs
-never change, so responses carry
-`Cache-Control: public, max-age=31536000, immutable`. You can put a CDN in
-front of ansel and it will cache correctly.
+caches it in the bucket. Later requests are served from that cache.
+
+Images never change once uploaded, so responses are cacheable. Signed-URL
+responses are `public` until the URL expires, so a CDN in front of ansel
+caches them but never serves them past their expiry. Responses to
+token-authenticated requests are `private`. With `fmt=auto`, responses also
+send `Vary: Accept`.
 
 ### `GET /images/{id}/info`: metadata
 
@@ -223,6 +249,7 @@ Errors return `{ "error": "..." }` with one of these status codes:
 | `415`  | Not an image, or a format that isn't allowed.                            |
 | `422`  | The file claims to be an image but can't be decoded.                     |
 | `502`  | The storage backend failed.                                              |
+| `503`  | The request took longer than `ANSEL_REQUEST_TIMEOUT`.                    |
 
 ## API documentation
 
@@ -239,7 +266,7 @@ They run in this order: **crop → resize → rotate/flip → adjust → encode*
 | Param    | Values                                     | Default         | Notes                                                                     |
 | -------- | ------------------------------------------ | --------------- | ------------------------------------------------------------------------- |
 | `w`, `h` | `1`–`ANSEL_MAX_OUTPUT_DIMENSION`           | —               | Target size. Give one to keep the aspect ratio.                           |
-| `fit`    | `contain`, `cover`, `fill`, `inside`       | `inside`        | `inside` never upscales. `cover` crops to fill the box.                   |
+| `fit`    | `inside`, `contain`, `cover`, `fill`       | `inside`        | `inside` fits the box without upscaling; `contain` may upscale; `cover` fills the box and crops; `fill` stretches. |
 | `gravity`| `center`, `n`, `s`, `e`, `w`, `ne`, …      | `center`        | Which part to keep when `fit=cover` crops.                                |
 | `crop`   | `x,y,w,h`                                  | —               | Crop in source pixels before resizing.                                    |
 | `rot`    | `90`, `180`, `270`                         | —               | Rotation, applied after EXIF auto-orientation.                            |
@@ -247,10 +274,17 @@ They run in this order: **crop → resize → rotate/flip → adjust → encode*
 | `blur`   | `0.1`–`100`                                | —               | Gaussian blur sigma.                                                      |
 | `gray`   | `true`                                     | —               | Convert to grayscale.                                                     |
 | `fmt`    | `jpeg`, `png`, `webp`, `avif`, `gif`, `auto` | source format | `auto` chooses AVIF or WebP from the request's `Accept` header.           |
-| `q`      | `1`–`100`                                  | `82`            | Quality for lossy formats. PNG and GIF ignore it.                         |
+| `q`      | `1`–`100`                                  | `82`            | Quality for lossy formats (JPEG, WebP, AVIF). PNG and GIF ignore it.      |
+| `preset` | a name from `ANSEL_PRESETS`                | —               | A named set of the parameters above. Can't be combined with them.         |
 
-**Supported input formats:** JPEG, PNG, WebP, GIF, AVIF, TIFF, BMP. Ansel never
-accepts SVG, because SVG files can carry scripts (see [Security](#security)).
+**Input formats:** JPEG, PNG, WebP, and GIF by default; TIFF and BMP can be
+enabled with `ANSEL_ALLOWED_FORMATS`. Animated GIF and WebP uploads keep only
+their first frame. AVIF is an output format only (decoding it would need a
+native library). Ansel never accepts SVG, because SVG files can carry scripts
+(see [Security](#security)).
+
+**Output formats:** JPEG, PNG, WebP, GIF, and AVIF. AVIF needs the `avif` Cargo
+feature, which the Docker image enables.
 
 ## Security
 
@@ -269,9 +303,12 @@ shouldn't need to change any of them for a typical deployment.
   bucket with variants. By default, the signing key is derived from
   `ANSEL_API_TOKEN`, so you only manage one secret. Set `ANSEL_SIGNING_KEY` to
   rotate the signing key separately.
-- **Public reads are opt-in.** `ANSEL_PUBLIC_READS=true` serves originals
-  without a signature. Transform requests still need one, unless they match an
-  entry in `ANSEL_PRESETS`.
+- **Public reads are opt-in.** `ANSEL_PUBLIC_READS=true` serves originals,
+  and the named transforms in `ANSEL_PRESETS`, without a signature. Any other
+  transform still needs one, so the public can't make the server render
+  arbitrary variants.
+- **Signed URLs can't be stretched.** Unknown or repeated query parameters
+  are rejected, and any parameter added to a signed URL invalidates it.
 
 **Upload checks**
 
@@ -299,12 +336,17 @@ shouldn't need to change any of them for a typical deployment.
   endpoint, so there is no risk of server-side request forgery.
 - **Response headers are hardened.** Every response sets
   `X-Content-Type-Options: nosniff`,
-  `Content-Security-Policy: default-src 'none'`, and an exact `Content-Type`.
+  `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; sandbox`,
+  `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and an exact
+  `Content-Type`. CORS is off unless you list origins.
+- **Errors don't leak internals.** Storage failures are logged in full but
+  reported to clients as a generic `502`.
 - **Resources are limited.** Request timeouts, a concurrency cap on image
   processing (`ANSEL_MAX_CONCURRENCY`), and a maximum output size keep one
   client from starving the others.
-- **The container is minimal.** The Docker image runs as a non-root user from
-  a distroless base, with a read-only filesystem.
+- **The container is minimal.** The Docker image runs as a non-root user on
+  a distroless base, with no shell. With bucket storage it never writes to
+  disk, so it can run with a read-only filesystem.
 
 ## Configuration
 
@@ -328,7 +370,7 @@ any of these by hand.
 | ------------------- | ------------------------------------------- | -------------------------- | ------------------------------------------------------------------- |
 | `BUCKET`            | `AWS_S3_BUCKET_NAME`, `AWS_BUCKET`          | —                          | Bucket name. Required unless `ANSEL_STORAGE=fs`.                    |
 | `ENDPOINT`          | `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL`   | AWS S3                     | S3 endpoint URL.                                                    |
-| `REGION`            | `AWS_REGION`, `AWS_DEFAULT_REGION`          | `auto`                     | Region used for request signing.                                    |
+| `REGION`            | `AWS_REGION`, `AWS_DEFAULT_REGION`          | `auto` (`us-east-1` for AWS) | Region used for request signing.                                  |
 | `ACCESS_KEY_ID`     | `AWS_ACCESS_KEY_ID`                         | —                          | Access key.                                                         |
 | `SECRET_ACCESS_KEY` | `AWS_SECRET_ACCESS_KEY`                     | —                          | Secret key.                                                         |
 | `ANSEL_S3_PATH_STYLE` | —                                         | `false`                    | Use path-style URLs. MinIO usually needs this; Railway doesn't.     |
@@ -342,18 +384,17 @@ any of these by hand.
 | ---------------------------- | ------------------------------- | ---------------------------------------------------------------------------- |
 | `ANSEL_MAX_UPLOAD_BYTES`     | `20971520` (20 MiB)             | Largest request body accepted.                                               |
 | `ANSEL_MAX_PIXELS`           | `50000000` (50 MP)              | Largest decoded image (width × height). Protects against decompression bombs. |
-| `ANSEL_MAX_OUTPUT_DIMENSION` | `4096`                          | Largest `w` or `h` a transform can request.                                  |
-| `ANSEL_ALLOWED_FORMATS`      | `jpeg,png,webp,gif,avif`        | Input formats accepted on upload. `tiff` and `bmp` are available on request. |
+| `ANSEL_MAX_OUTPUT_DIMENSION` | `4096`                          | Largest `w` or `h` a transform can produce (at most `16383`).                |
+| `ANSEL_ALLOWED_FORMATS`      | `jpeg,png,webp,gif`             | Input formats accepted on upload. `tiff` and `bmp` can be added.             |
 | `ANSEL_DEFAULT_QUALITY`      | `82`                            | Quality used when a transform doesn't set `q`.                               |
-| `ANSEL_STORE_FORMAT`         | `original`                      | Format originals are stored in: `original`, `webp`, or `avif`.               |
-| `ANSEL_STRIP_METADATA`       | `true`                          | Remove EXIF, XMP, IPTC, and GPS data on upload.                              |
-| `ANSEL_URL_TTL`              | `604800` (7 days)               | Default lifetime of signed URLs, in seconds.                                 |
-| `ANSEL_SIGNING_KEY`          | derived from `ANSEL_API_TOKEN`  | Separate HMAC key for signed URLs.                                           |
-| `ANSEL_PUBLIC_READS`         | `false`                         | Serve originals without a signature.                                         |
-| `ANSEL_PRESETS`              | —                               | Named transforms anyone may request, e.g. `thumb=w:200,h:200,fit:cover;hero=w:1600,fmt:auto`. Use `?preset=thumb`. |
+| `ANSEL_STORE_FORMAT`         | `original`                      | Format originals are stored in: `original` or `webp`. TIFF and BMP are stored as PNG. |
+| `ANSEL_STRIP_METADATA`       | `true`                          | Re-encode uploads, removing EXIF, XMP, IPTC, and GPS data. When `false`, files are stored byte for byte (they're still fully decoded to validate them). |
+| `ANSEL_SIGNING_KEY`          | derived from `ANSEL_API_TOKEN`  | Separate HMAC key for signed URLs, at least 32 characters.                   |
+| `ANSEL_PUBLIC_READS`         | `false`                         | Serve originals and presets without a signature.                             |
+| `ANSEL_PRESETS`              | —                               | Named transforms, e.g. `thumb=w:200,h:200,fit:cover;hero=w:1600,fmt:auto`. Request them with `?preset=thumb`. |
 | `ANSEL_CACHE_VARIANTS`       | `true`                          | Store rendered variants in the bucket so they are only rendered once.        |
 | `ANSEL_MAX_CONCURRENCY`      | number of CPUs                  | Maximum images processed at the same time. Extra requests wait in a queue.   |
-| `ANSEL_REQUEST_TIMEOUT`      | `30`                            | Seconds before a request is aborted.                                         |
+| `ANSEL_REQUEST_TIMEOUT`      | `30`                            | Seconds before a request is aborted with `503`.                              |
 | `ANSEL_CORS_ORIGINS`         | —                               | Comma-separated origins allowed for browser uploads. CORS is off when unset. |
 | `PORT`                       | `8080`                          | Port the HTTP server listens on. Railway sets this automatically.            |
 | `RUST_LOG`                   | `ansel=info`                    | Log filter.                                                                  |
@@ -365,20 +406,26 @@ any of these by hand.
 | `ANSEL_URL`       | Base URL of your ansel server.                                                          |
 | `ANSEL_API_TOKEN` | The same token the server uses. The SDK also derives the URL signing key from it.       |
 | `ANSEL_SIGNING_KEY` | Set this only if the server sets it.                                                  |
+| `ANSEL_URL_TTL`   | Lifetime of signed URLs in seconds. Defaults to `604800` (7 days).                      |
 
 ## Cargo features
 
-Ansel keeps its dependency list short. The client pulls in `reqwest`, `serde`,
-and `hmac`/`sha2` for signing URLs. The server uses
+Ansel keeps its dependency list short. The client is `reqwest`, `serde`,
+`serde_json`, and `hmac`/`sha2` for signing URLs. The server uses
 [`rusty-s3`](https://github.com/paolobarbolini/rusty-s3), which only signs
 requests and sends them with the same `reqwest` client, instead of the full
-AWS SDK.
+AWS SDK. Image IDs, timestamps, and hex encoding are written by hand rather
+than pulled in as crates.
 
 | Feature  | Default | Purpose                                                                                     |
 | -------- | ------- | ------------------------------------------------------------------------------------------- |
 | `client` | yes     | The HTTP client SDK.                                                                        |
-| `server` | no      | The ansel server binary. Adds axum, tokio, tracing, dotenvy, `image`, and `rusty-s3`.       |
-| `avif`   | no      | AVIF encoding through `ravif`. It's a separate feature because it adds build time. The Docker image enables it. |
+| `server` | no      | The ansel server binary. Adds `axum`, `tokio`, `tower-http`, `tracing`, `dotenvy`, `image`, `rusty-s3`, `getrandom`, and `webp`. |
+| `avif`   | no      | AVIF output through `ravif`. It's a separate feature because it adds build time. The Docker image enables it. |
+
+The `webp` crate builds libwebp from source for quality-controlled (lossy)
+WebP, so building the server needs a C compiler. The `image` crate alone can
+only write lossless WebP.
 
 Run the server locally with:
 
@@ -394,9 +441,10 @@ The Dockerfile and `dev.sh` already pass these flags.
 ./dev.sh
 ```
 
-This creates a `.env` template if one doesn't exist, sets
-`ANSEL_STORAGE=fs` so you don't need a bucket, and runs the server under
-`cargo watch`, which rebuilds on every change.
+This creates a `.env` file with a fresh `ANSEL_API_TOKEN` if one doesn't
+exist, sets `ANSEL_STORAGE=fs` so you don't need a bucket, and runs the server
+under [`cargo watch`](https://crates.io/crates/cargo-watch), which rebuilds on
+every change.
 
 To test against a real S3 API locally, start MinIO:
 
@@ -405,10 +453,12 @@ docker run -p 9000:9000 minio/minio server /data
 # BUCKET=ansel ENDPOINT=http://localhost:9000 ANSEL_S3_PATH_STYLE=true ...
 ```
 
-Run the tests:
+Run the tests. The server tests start a real server on a random port and
+drive it through the SDK:
 
 ```sh
-cargo test --all-features
+cargo test --features server          # quick
+cargo test --all-features             # also AVIF; slower to build
 ```
 
 ## Deploying elsewhere
