@@ -1,0 +1,174 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "ansel",
+    "version": "0.1.0",
+    "description": "Image upload, editing, and conversion. Every endpoint except /health needs `Authorization: Bearer <ANSEL_API_TOKEN>`; GET /images/{id} also accepts a signed URL (`exp` and `sig`)."
+  },
+  "servers": [{ "url": "/" }],
+  "security": [{ "bearer": [] }],
+  "components": {
+    "securitySchemes": {
+      "bearer": { "type": "http", "scheme": "bearer" }
+    },
+    "schemas": {
+      "ImageInfo": {
+        "type": "object",
+        "required": ["id", "format", "width", "height", "bytes", "created_at"],
+        "properties": {
+          "id": { "type": "string", "example": "01JD8Z6Q4M3V9K2T7XW5R8N0PB" },
+          "format": { "type": "string", "enum": ["jpeg", "png", "webp", "gif"] },
+          "width": { "type": "integer", "example": 4032 },
+          "height": { "type": "integer", "example": 3024 },
+          "bytes": { "type": "integer", "example": 2481930 },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": { "error": { "type": "string" } }
+      }
+    },
+    "requestBodies": {
+      "Image": {
+        "required": true,
+        "content": {
+          "multipart/form-data": {
+            "schema": {
+              "type": "object",
+              "required": ["file"],
+              "properties": { "file": { "type": "string", "format": "binary" } }
+            }
+          },
+          "application/octet-stream": { "schema": { "type": "string", "format": "binary" } }
+        }
+      }
+    },
+    "parameters": {
+      "id": { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+      "w": { "name": "w", "in": "query", "description": "Target width.", "schema": { "type": "integer", "minimum": 1 } },
+      "h": { "name": "h", "in": "query", "description": "Target height.", "schema": { "type": "integer", "minimum": 1 } },
+      "fit": { "name": "fit", "in": "query", "schema": { "type": "string", "enum": ["inside", "contain", "cover", "fill"], "default": "inside" } },
+      "gravity": { "name": "gravity", "in": "query", "schema": { "type": "string", "enum": ["center", "n", "s", "e", "w", "ne", "nw", "se", "sw"], "default": "center" } },
+      "crop": { "name": "crop", "in": "query", "description": "`x,y,w,h` in source pixels.", "schema": { "type": "string" } },
+      "rot": { "name": "rot", "in": "query", "schema": { "type": "string", "enum": ["90", "180", "270"] } },
+      "flip": { "name": "flip", "in": "query", "schema": { "type": "string", "enum": ["h", "v", "hv"] } },
+      "blur": { "name": "blur", "in": "query", "schema": { "type": "number", "minimum": 0.1, "maximum": 100 } },
+      "gray": { "name": "gray", "in": "query", "schema": { "type": "string", "enum": ["true"] } },
+      "fmt": { "name": "fmt", "in": "query", "schema": { "type": "string", "enum": ["jpeg", "png", "webp", "gif", "avif", "auto"] } },
+      "q": { "name": "q", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100 } },
+      "preset": { "name": "preset", "in": "query", "description": "A name from ANSEL_PRESETS. Can't be combined with other parameters.", "schema": { "type": "string" } }
+    },
+    "responses": {
+      "Image": {
+        "description": "The image.",
+        "content": { "image/*": { "schema": { "type": "string", "format": "binary" } } }
+      },
+      "Error": {
+        "description": "An error.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Liveness check",
+        "security": [],
+        "responses": { "200": { "description": "ok", "content": { "text/plain": { "schema": { "type": "string" } } } } }
+      }
+    },
+    "/images": {
+      "post": {
+        "summary": "Upload an image",
+        "requestBody": { "$ref": "#/components/requestBodies/Image" },
+        "responses": {
+          "201": { "description": "Stored.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ImageInfo" } } } },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "413": { "$ref": "#/components/responses/Error" },
+          "415": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" },
+          "502": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/images/{id}": {
+      "get": {
+        "summary": "Fetch an image, optionally transformed",
+        "parameters": [
+          { "$ref": "#/components/parameters/id" },
+          { "$ref": "#/components/parameters/w" },
+          { "$ref": "#/components/parameters/h" },
+          { "$ref": "#/components/parameters/fit" },
+          { "$ref": "#/components/parameters/gravity" },
+          { "$ref": "#/components/parameters/crop" },
+          { "$ref": "#/components/parameters/rot" },
+          { "$ref": "#/components/parameters/flip" },
+          { "$ref": "#/components/parameters/blur" },
+          { "$ref": "#/components/parameters/gray" },
+          { "$ref": "#/components/parameters/fmt" },
+          { "$ref": "#/components/parameters/q" },
+          { "$ref": "#/components/parameters/preset" },
+          { "name": "exp", "in": "query", "description": "Signed URL expiry (Unix seconds).", "schema": { "type": "integer" } },
+          { "name": "sig", "in": "query", "description": "Signed URL signature.", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/Image" },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "delete": {
+        "summary": "Delete an image and its cached variants",
+        "parameters": [{ "$ref": "#/components/parameters/id" }],
+        "responses": {
+          "204": { "description": "Deleted." },
+          "401": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/images/{id}/info": {
+      "get": {
+        "summary": "Image metadata",
+        "parameters": [{ "$ref": "#/components/parameters/id" }],
+        "responses": {
+          "200": { "description": "Metadata.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ImageInfo" } } } },
+          "401": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/convert": {
+      "post": {
+        "summary": "Transform an image without storing it",
+        "parameters": [
+          { "$ref": "#/components/parameters/w" },
+          { "$ref": "#/components/parameters/h" },
+          { "$ref": "#/components/parameters/fit" },
+          { "$ref": "#/components/parameters/gravity" },
+          { "$ref": "#/components/parameters/crop" },
+          { "$ref": "#/components/parameters/rot" },
+          { "$ref": "#/components/parameters/flip" },
+          { "$ref": "#/components/parameters/blur" },
+          { "$ref": "#/components/parameters/gray" },
+          { "$ref": "#/components/parameters/fmt" },
+          { "$ref": "#/components/parameters/q" },
+          { "$ref": "#/components/parameters/preset" }
+        ],
+        "requestBody": { "$ref": "#/components/requestBodies/Image" },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Image" },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "413": { "$ref": "#/components/responses/Error" },
+          "415": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    }
+  }
+}

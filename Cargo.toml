@@ -1,0 +1,68 @@
+[package]
+name = "ansel"
+version = "0.1.0"
+edition = "2024"
+description = "Image upload, editing, and conversion microservice, plus its Rust client SDK."
+license = "MIT"
+repository = "https://github.com/bytebury/ansel"
+readme = "README.md"
+keywords = ["image", "resize", "s3", "microservice", "webp"]
+categories = ["multimedia::images", "web-programming::http-server", "api-bindings"]
+exclude = ["assets/", ".github/", "Dockerfile", "dev.sh"]
+
+[[bin]]
+name = "ansel"
+path = "src/main.rs"
+required-features = ["server"]
+
+[features]
+default = ["client"]
+# The HTTP client SDK.
+client = ["dep:reqwest", "dep:serde_json"]
+# The ansel server binary.
+server = [
+  "dep:axum",
+  "dep:dotenvy",
+  "dep:getrandom",
+  "dep:image",
+  "dep:reqwest",
+  "dep:rusty-s3",
+  "dep:serde_json",
+  "dep:tokio",
+  "dep:tower-http",
+  "dep:tracing",
+  "dep:tracing-subscriber",
+  "dep:webp",
+]
+# AVIF output (through ravif). Adds noticeable build time.
+avif = ["image?/avif"]
+
+[dependencies]
+# Shared by the client and the server.
+hmac = "0.13.0"
+serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.11.2"
+
+# Client (and the server's S3 transport).
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"], optional = true }
+serde_json = { version = "1.0.154", optional = true }
+
+# Server.
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "matched-path", "multipart", "query", "tokio", "tracing"], optional = true }
+dotenvy = { version = "0.15.7", optional = true }
+getrandom = { version = "0.4.3", optional = true }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif", "tiff", "bmp"], optional = true }
+rusty-s3 = { version = "0.12.0", optional = true }
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "fs"], optional = true }
+tower-http = { version = "0.7.1", features = ["cors", "timeout", "set-header"], optional = true }
+tracing = { version = "0.1.44", optional = true }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"], optional = true }
+webp = { version = "0.3.1", default-features = false, optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

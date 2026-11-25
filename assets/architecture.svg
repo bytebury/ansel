@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 200" width="760" height="200" role="img" aria-labelledby="title desc">
+  <title id="title">How ansel fits in</title>
+  <desc id="desc">Your app calls ansel through the ansel crate. Ansel stores images in a Railway Bucket or any S3-compatible store through the S3 API, and returns the image or a signed image URL to your app.</desc>
+  <style>
+    .box { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.5; }
+    .core { fill: #fff4ec; stroke: #ff7629; stroke-width: 2; }
+    .line { stroke: #57606a; stroke-width: 1.75; fill: none; }
+    .head { fill: #57606a; }
+    .title { font: 600 16px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+    .sub { font: 400 11.5px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #59636e; }
+    .label { font: 500 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #59636e; }
+    @media (prefers-color-scheme: dark) {
+      .box { fill: #161b22; stroke: #3d444d; }
+      .core { fill: #2b1a10; stroke: #ff7629; }
+      .line { stroke: #9198a1; }
+      .head { fill: #9198a1; }
+      .title { fill: #f0f6fc; }
+      .sub, .label { fill: #9198a1; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="head" d="M0 0 L10 5 L0 10 Z"/>
+    </marker>
+  </defs>
+
+  <!-- Your app -->
+  <rect class="box" x="20" y="50" width="150" height="64" rx="12"/>
+  <text class="title" x="95" y="87" text-anchor="middle">Your app</text>
+
+  <!-- ansel -->
+  <rect class="core" x="276" y="40" width="228" height="84" rx="12"/>
+  <text class="title" x="390" y="77" text-anchor="middle">ansel</text>
+  <text class="sub" x="390" y="99" text-anchor="middle">resize · crop · convert · strip metadata</text>
+
+  <!-- Bucket -->
+  <path class="box" d="M590 54 v60 a75 10 0 0 0 150 0 v-60"/>
+  <ellipse class="box" cx="665" cy="54" rx="75" ry="10"/>
+  <text class="title" x="665" y="90" text-anchor="middle">Railway Bucket</text>
+  <text class="sub" x="665" y="108" text-anchor="middle">or any S3</text>
+
+  <!-- Your app → ansel -->
+  <line class="line" x1="170" y1="70" x2="274" y2="70" marker-end="url(#arrow)"/>
+  <text class="label" x="222" y="60" text-anchor="middle">ansel crate</text>
+
+  <!-- ansel → bucket -->
+  <line class="line" x1="504" y1="82" x2="588" y2="82" marker-end="url(#arrow)"/>
+  <text class="label" x="546" y="72" text-anchor="middle">S3 API</text>
+
+  <!-- ansel → Your app (response) -->
+  <path class="line" d="M390 124 V160 H95 V116" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <text class="label" x="242" y="182" text-anchor="middle">image or signed image URL</text>
+</svg>
