@@ -31,7 +31,7 @@ const INIT: &str =
 
 /// Allows only the pinned CDN assets and same-origin API calls.
 const PAGE_CSP: &str = "default-src 'none'; script-src 'self' https://cdn.jsdelivr.net; \
-    style-src https://cdn.jsdelivr.net 'unsafe-inline'; img-src 'self' data:; \
+    style-src https://cdn.jsdelivr.net 'unsafe-inline'; img-src 'self' data: blob:; \
     connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 pub async fn openapi() -> Response {

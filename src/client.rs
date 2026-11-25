@@ -171,19 +171,31 @@ impl Client {
     }
 
     /// Downloads an image, with a transform applied.
+    ///
+    /// The result carries the content type, so your app can serve it to a
+    /// browser as is. See [`Image`].
     pub async fn download(
         &self,
         id: impl AsRef<str>,
         transform: impl Borrow<Transform>,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<Image> {
         let id = checked_id(id.as_ref())?;
         let query = transform.borrow().to_query();
         let mut url = format!("{}/images/{id}", self.base_url);
         if !query.is_empty() {
             url = format!("{url}?{query}");
         }
-        let res = self.http.get(url).bearer_auth(&self.token).send().await?;
-        Ok(check(res).await?.bytes().await?.to_vec())
+        let res = check(self.http.get(url).bearer_auth(&self.token).send().await?).await?;
+        let content_type = res
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        Ok(Image {
+            bytes: res.bytes().await?.to_vec(),
+            content_type,
+        })
     }
 
     /// Deletes an image and all of its cached variants.
@@ -234,6 +246,37 @@ impl Client {
             self.base_url
         ))
     }
+}
+
+/// A downloaded image, ready to send to a browser.
+///
+/// Images never change once uploaded, so a response built from one can be
+/// cached for as long as browsers allow. Send [`Image::CACHE_CONTROL`] with it:
+///
+/// ```no_run
+/// # async fn run(id: String) -> ansel::Result<()> {
+/// let image = ansel::download!(id, width = 800)?;
+/// // In your web framework's handler:
+/// let headers = [
+///     ("content-type", image.content_type.as_str()),
+///     ("cache-control", ansel::Image::CACHE_CONTROL),
+/// ];
+/// # let _ = (headers, image.bytes);
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Image {
+    /// The encoded image.
+    pub bytes: Vec<u8>,
+    /// Its MIME type, such as `image/webp`.
+    pub content_type: String,
+}
+
+impl Image {
+    /// `Cache-Control` for serving an image: browsers and CDNs may keep it
+    /// for a year without checking back, because an image ID and transform
+    /// always produce the same bytes.
+    pub const CACHE_CONTROL: &'static str = "public, max-age=31536000, immutable";
 }
 
 fn checked_id(id: &str) -> Result<&str> {
@@ -301,7 +344,7 @@ pub async fn get(id: impl AsRef<str>) -> Result<ImageInfo> {
 }
 
 /// Downloads an image with the global client. See [`Client::download`].
-pub async fn download(id: impl AsRef<str>, transform: impl Borrow<Transform>) -> Result<Vec<u8>> {
+pub async fn download(id: impl AsRef<str>, transform: impl Borrow<Transform>) -> Result<Image> {
     client()?.download(id, transform).await
 }
 

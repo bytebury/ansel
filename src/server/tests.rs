@@ -281,6 +281,8 @@ async fn metadata_is_stripped_and_orientation_applied() {
     assert_eq!((info.width, info.height), (20, 40));
 
     let stored = s.client.download(&info.id, Transform::new()).await.unwrap();
+    assert_eq!(stored.content_type, "image/jpeg");
+    let stored = stored.bytes;
     assert!(!stored.windows(4).any(|w| w == b"Exif"), "EXIF survived");
     assert_eq!(decode(&stored).0.dimensions(), (20, 40));
 }
@@ -465,7 +467,9 @@ async fn store_as_webp() {
     let s = start(|c| c.store_format = StoreFormat::WebP).await;
     let info = s.client.upload(png(20, 10)).await.unwrap();
     assert_eq!(info.format, Format::WebP);
-    let bytes = s.client.download(&info.id, Transform::new()).await.unwrap();
+    let image = s.client.download(&info.id, Transform::new()).await.unwrap();
+    assert_eq!(image.content_type, "image/webp");
+    let bytes = image.bytes;
     assert_eq!(decode(&bytes).1, ImageFormat::WebP);
 }
 
@@ -482,8 +486,9 @@ async fn macros_use_the_global_client() {
     let image = ansel::upload!(png(40, 40)).unwrap();
     assert_eq!(ansel::get!(image.id).unwrap(), image);
 
-    let small = ansel::download!(image.id, width = 10).unwrap();
-    assert_eq!(decode(&small).0.dimensions(), (10, 10));
+    let small = ansel::download!(image.id, width = 10, format = Format::Jpeg).unwrap();
+    assert_eq!(small.content_type, "image/jpeg");
+    assert_eq!(decode(&small.bytes).0.dimensions(), (10, 10));
 
     let webp = ansel::convert!(png(8, 4), format = Format::WebP, quality = 50).unwrap();
     assert_eq!(decode(&webp).1, ImageFormat::WebP);

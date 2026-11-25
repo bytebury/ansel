@@ -132,7 +132,7 @@ let webp: Vec<u8> = ansel::convert(png_bytes, Transform::new().format(Format::We
 
 ```rust
 let info = ansel::get(&image.id).await?;                              // dimensions, format, size, created_at
-let thumb = ansel::download(&image.id, Transform::new().width(200)).await?; // the image bytes
+let thumb = ansel::download(&image.id, Transform::new().width(200)).await?; // bytes + content type
 ansel::delete(&image.id).await?;                                      // removes the original and all cached variants
 ```
 
@@ -158,6 +158,41 @@ ansel::delete!(image.id)?;
 
 The macros use the global client, so call `ansel::setup` first or set
 `ANSEL_URL` and `ANSEL_API_TOKEN`. Like the functions, they return a `Result`.
+
+### Showing images on your website
+
+Serve images from a route in your own app. The route downloads the image from
+ansel and passes it to the browser with long-lived cache headers. Ansel and
+its token stay private behind your app.
+
+```rust
+use axum::{extract::Path, http::{header, StatusCode}, response::IntoResponse};
+
+// GET /images/{id}/thumb  →  <img src="/images/01JD8Z…/thumb">
+async fn thumbnail(Path(id): Path<String>) -> Result<impl IntoResponse, StatusCode> {
+    let image = ansel::download!(id, width = 400, height = 400, fit = ansel::Fit::Cover)
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, image.content_type),
+            (header::CACHE_CONTROL, ansel::Image::CACHE_CONTROL.to_string()),
+        ],
+        image.bytes,
+    ))
+}
+```
+
+Images never change once uploaded, so `Image::CACHE_CONTROL` lets browsers
+keep each one for a year without asking again. After the first view, the
+browser loads the image from its cache and your app isn't called at all.
+Ansel also caches each size it renders, so later requests for the same size
+are cheap.
+
+Keep the URL in your app stable for a given image and size, as in the example
+above, so the browser's cached copy is reused. Pick an explicit `format` (or
+leave it out to keep the original format) rather than `Format::Auto`. With
+`Auto`, ansel would pick the format from your app's request rather than the
+browser's.
 
 ## API
 
