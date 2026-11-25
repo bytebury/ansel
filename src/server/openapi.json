@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "ansel",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Image upload, editing, and conversion. Every endpoint except /health needs `Authorization: Bearer <ANSEL_API_TOKEN>`; GET /images/{id} also accepts a signed URL (`exp` and `sig`)."
   },
   "servers": [{ "url": "/" }],
