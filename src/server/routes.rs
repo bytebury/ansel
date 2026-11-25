@@ -44,6 +44,10 @@ enum Bearer {
 }
 
 fn bearer_status(headers: &HeaderMap, config: &Config) -> Bearer {
+    // With ANSEL_REQUIRE_API_TOKEN=false, every request is allowed.
+    let Some(expected) = &config.api_token_hash else {
+        return Bearer::Valid;
+    };
     let Some(value) = headers.get(header::AUTHORIZATION) else {
         return Bearer::Missing;
     };
@@ -56,12 +60,7 @@ fn bearer_status(headers: &HeaderMap, config: &Config) -> Bearer {
         })
         .map(str::trim);
     match token {
-        Some(t)
-            if signing::constant_time_eq(
-                &signing::sha256(t.as_bytes()),
-                &config.api_token_hash,
-            ) =>
-        {
+        Some(t) if signing::constant_time_eq(&signing::sha256(t.as_bytes()), expected) => {
             Bearer::Valid
         }
         _ => Bearer::Invalid,

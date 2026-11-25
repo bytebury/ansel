@@ -34,6 +34,12 @@ async fn main() -> ExitCode {
     };
 
     let port = config.port;
+    if config.api_token_hash.is_none() {
+        tracing::warn!(
+            "authentication is off (ANSEL_REQUIRE_API_TOKEN=false): anyone who can reach this \
+             server can upload and delete images, so keep it on a private network"
+        );
+    }
     tracing::info!("storing images in {}", storage.describe());
     let app = server::router(server::AppState::new(config, storage));
 

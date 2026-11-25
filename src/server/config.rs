@@ -14,9 +14,10 @@ use reqwest::Url;
 pub const MIN_TOKEN_LEN: usize = 32;
 
 pub struct Config {
-    /// SHA-256 of the API token. Only the hash is kept in memory, and
-    /// comparing hashes keeps the check constant-time for any input length.
-    pub api_token_hash: [u8; 32],
+    /// SHA-256 of the API token, or `None` when `ANSEL_REQUIRE_API_TOKEN=false`.
+    /// Only the hash is kept in memory, and comparing hashes keeps the check
+    /// constant-time for any input length.
+    pub api_token_hash: Option<[u8; 32]>,
     pub signing_key: Vec<u8>,
     pub storage: StorageConfig,
     pub key_prefix: String,
@@ -58,31 +59,12 @@ pub enum StoreFormat {
 
 impl Config {
     pub fn from_env() -> Result<Self, String> {
-        let token = var("ANSEL_API_TOKEN").ok_or(
-            "ANSEL_API_TOKEN is not set. Generate one with `openssl rand -hex 32` and add it to \
-             the service's variables.",
-        )?;
-        if token.contains("$(") || token.contains("${") || token.contains('`') {
-            return Err(
-                "ANSEL_API_TOKEN contains a shell command instead of a token. Variables aren't \
-                 run through a shell, so run `openssl rand -hex 32` in a terminal and paste its \
-                 output as the value."
-                    .into(),
-            );
-        }
-        if token.len() < MIN_TOKEN_LEN {
-            return Err(format!(
-                "ANSEL_API_TOKEN must be at least {MIN_TOKEN_LEN} characters (it is {}). Generate \
-                 one with `openssl rand -hex 32`.",
-                token.len()
-            ));
-        }
-        let signing_key = signing::signing_key(&token, var("ANSEL_SIGNING_KEY").as_deref());
-        if signing_key.len() < MIN_TOKEN_LEN {
-            return Err(format!(
-                "ANSEL_SIGNING_KEY must be at least {MIN_TOKEN_LEN} characters"
-            ));
-        }
+        let (api_token_hash, signing_key) = if parse_bool("ANSEL_REQUIRE_API_TOKEN", true)? {
+            let (hash, key) = token_auth()?;
+            (Some(hash), key)
+        } else {
+            no_auth()?
+        };
 
         let max_output_dimension = parse("ANSEL_MAX_OUTPUT_DIMENSION", 4096u32)?;
         if !(1..=16_383).contains(&max_output_dimension) {
@@ -120,7 +102,7 @@ impl Config {
         let cpus = std::thread::available_parallelism().map_or(2, |n| n.get());
 
         Ok(Self {
-            api_token_hash: signing::sha256(token.as_bytes()),
+            api_token_hash,
             signing_key,
             storage: storage_config()?,
             key_prefix: key_prefix()?,
@@ -140,6 +122,58 @@ impl Config {
             port: parse("PORT", 8080)?,
         })
     }
+}
+
+/// The API token's hash and the URL signing key, when a token is required.
+fn token_auth() -> Result<([u8; 32], Vec<u8>), String> {
+    let token = var("ANSEL_API_TOKEN").ok_or(
+        "ANSEL_API_TOKEN is not set. Generate one with `openssl rand -hex 32` and add it to the \
+         service's variables. To run without a token on a private network, set \
+         ANSEL_REQUIRE_API_TOKEN=false instead.",
+    )?;
+    if token.contains("$(") || token.contains("${") || token.contains('`') {
+        return Err(
+            "ANSEL_API_TOKEN contains a shell command instead of a token. Variables aren't \
+             run through a shell, so run `openssl rand -hex 32` in a terminal and paste its \
+             output as the value."
+                .into(),
+        );
+    }
+    if token.len() < MIN_TOKEN_LEN {
+        return Err(format!(
+            "ANSEL_API_TOKEN must be at least {MIN_TOKEN_LEN} characters (it is {}). Generate \
+             one with `openssl rand -hex 32`.",
+            token.len()
+        ));
+    }
+    let signing_key = signing::signing_key(&token, var("ANSEL_SIGNING_KEY").as_deref());
+    if signing_key.len() < MIN_TOKEN_LEN {
+        return Err(format!(
+            "ANSEL_SIGNING_KEY must be at least {MIN_TOKEN_LEN} characters"
+        ));
+    }
+    Ok((signing::sha256(token.as_bytes()), signing_key))
+}
+
+/// Authentication turned off with `ANSEL_REQUIRE_API_TOKEN=false`. Refused
+/// when Railway reports a public domain for the service.
+fn no_auth() -> Result<(Option<[u8; 32]>, Vec<u8>), String> {
+    if let Some(domain) = var("RAILWAY_PUBLIC_DOMAIN") {
+        return Err(format!(
+            "ANSEL_REQUIRE_API_TOKEN=false, but this service has a public domain ({domain}), so \
+             anyone on the internet could upload and delete images. Remove the public domain and \
+             reach ansel over the private network, or set ANSEL_API_TOKEN and remove \
+             ANSEL_REQUIRE_API_TOKEN."
+        ));
+    }
+    if var("ANSEL_API_TOKEN").is_some() {
+        tracing::warn!("ANSEL_API_TOKEN is set but ignored, because ANSEL_REQUIRE_API_TOKEN=false");
+    }
+    // Every request is allowed, so signatures are never checked. A random key
+    // keeps the type simple without a usable default.
+    let mut key = vec![0u8; 32];
+    getrandom::fill(&mut key).map_err(|e| format!("couldn't generate a key: {e}"))?;
+    Ok((None, key))
 }
 
 fn storage_config() -> Result<StorageConfig, String> {

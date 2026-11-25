@@ -30,7 +30,7 @@ mod transform;
 #[cfg(feature = "client")]
 pub use client::{
     Client, DEFAULT_URL_TTL, Error, Image, Result, client, convert, delete, download, get, install,
-    setup, upload, url,
+    setup, setup_unauthenticated, upload, url,
 };
 pub use transform::{
     Crop, Fit, Flip, Format, Gravity, ImageInfo, Rotation, Transform, is_valid_id,

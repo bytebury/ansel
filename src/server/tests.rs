@@ -28,7 +28,7 @@ impl Drop for TestServer {
 
 fn config(root: PathBuf) -> Config {
     Config {
-        api_token_hash: ansel::signing::sha256(TOKEN.as_bytes()),
+        api_token_hash: Some(ansel::signing::sha256(TOKEN.as_bytes())),
         signing_key: ansel::signing::signing_key(TOKEN, None),
         storage: StorageConfig::Fs { root },
         key_prefix: "ansel/".into(),
@@ -521,4 +521,31 @@ async fn avif_output() {
         .await
         .unwrap();
     assert_eq!(res.headers()["content-type"], "image/avif");
+}
+
+#[tokio::test]
+async fn token_can_be_turned_off() {
+    let s = start(|c| c.api_token_hash = None).await;
+    let client = Client::unauthenticated(&s.url).unwrap();
+
+    let info = client.upload(png(30, 20)).await.unwrap();
+    assert_eq!(client.get(&info.id).await.unwrap(), info);
+
+    // Plain URLs work without a token or signature.
+    let url = client.url(&info.id, Transform::new().width(15)).unwrap();
+    assert!(!url.contains("sig="), "{url}");
+    let res = reqwest::get(&url).await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(decode(&res.bytes().await.unwrap()).0.dimensions(), (15, 10));
+
+    let image = client.download(&info.id, Transform::new()).await.unwrap();
+    assert_eq!(image.content_type, "image/png");
+    // A client that still sends a token is accepted too.
+    assert_eq!(s.client.get(&info.id).await.unwrap(), info);
+
+    client.delete(&info.id).await.unwrap();
+    assert!(matches!(
+        client.get(&info.id).await,
+        Err(ansel::Error::Api { status: 404, .. })
+    ));
 }

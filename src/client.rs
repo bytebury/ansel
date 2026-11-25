@@ -66,8 +66,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Clone)]
 pub struct Client {
     base_url: String,
-    token: String,
-    signing_key: Vec<u8>,
+    token: Option<String>,
+    signing_key: Option<Vec<u8>>,
     url_ttl: Duration,
     http: reqwest::Client,
 }
@@ -85,19 +85,32 @@ impl fmt::Debug for Client {
 impl Client {
     /// Creates a client for the server at `url`, authenticating with `token`.
     pub fn new(url: impl Into<String>, token: impl Into<String>) -> Result<Self> {
-        let base_url = url.into().trim().trim_end_matches('/').to_string();
+        let token = token.into();
+        if token.is_empty() {
+            return Err(Error::Config("API token is empty".into()));
+        }
+        Self::build(url.into(), Some(token))
+    }
+
+    /// Creates a client that sends no token, for a server running with
+    /// `ANSEL_REQUIRE_API_TOKEN=false` (for example, one only reachable over
+    /// a private network).
+    ///
+    /// [`Client::url`] then returns plain, unsigned URLs.
+    pub fn unauthenticated(url: impl Into<String>) -> Result<Self> {
+        Self::build(url.into(), None)
+    }
+
+    fn build(url: String, token: Option<String>) -> Result<Self> {
+        let base_url = url.trim().trim_end_matches('/').to_string();
         if !(base_url.starts_with("https://") || base_url.starts_with("http://")) {
             return Err(Error::Config(format!(
                 "server URL must start with https:// or http://, got `{base_url}`"
             )));
         }
-        let token = token.into();
-        if token.is_empty() {
-            return Err(Error::Config("API token is empty".into()));
-        }
         Ok(Self {
             base_url,
-            signing_key: signing::signing_key(&token, None),
+            signing_key: token.as_deref().map(|t| signing::signing_key(t, None)),
             token,
             url_ttl: DEFAULT_URL_TTL,
             http: reqwest::Client::builder()
@@ -106,14 +119,16 @@ impl Client {
         })
     }
 
-    /// Creates a client from `ANSEL_URL` and `ANSEL_API_TOKEN`. Also reads
-    /// `ANSEL_SIGNING_KEY` and `ANSEL_URL_TTL` (seconds) when set.
+    /// Creates a client from `ANSEL_URL` and, when set, `ANSEL_API_TOKEN`.
+    /// Without a token the client is [unauthenticated](Client::unauthenticated).
+    /// Also reads `ANSEL_SIGNING_KEY` and `ANSEL_URL_TTL` (seconds) when set.
     pub fn from_env() -> Result<Self> {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
         let url = var("ANSEL_URL").ok_or_else(|| Error::Config("ANSEL_URL is not set".into()))?;
-        let token = var("ANSEL_API_TOKEN")
-            .ok_or_else(|| Error::Config("ANSEL_API_TOKEN is not set".into()))?;
-        let mut client = Self::new(url, token)?;
+        let mut client = match var("ANSEL_API_TOKEN") {
+            Some(token) => Self::new(url, token)?,
+            None => Self::unauthenticated(url)?,
+        };
         if let Some(key) = var("ANSEL_SIGNING_KEY") {
             client = client.with_signing_key(key);
         }
@@ -129,8 +144,16 @@ impl Client {
     /// Uses a separate URL signing key. Only needed when the server sets
     /// `ANSEL_SIGNING_KEY`.
     pub fn with_signing_key(mut self, key: impl AsRef<[u8]>) -> Self {
-        self.signing_key = key.as_ref().to_vec();
+        self.signing_key = Some(key.as_ref().to_vec());
         self
+    }
+
+    /// Adds the bearer token, when there is one.
+    fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.token {
+            Some(token) => req.bearer_auth(token),
+            None => req,
+        }
     }
 
     /// Changes how long signed URLs last by default.
@@ -148,9 +171,7 @@ impl Client {
     /// Uploads an image and returns its metadata.
     pub async fn upload(&self, bytes: impl Into<reqwest::Body>) -> Result<ImageInfo> {
         let res = self
-            .http
-            .post(format!("{}/images", self.base_url))
-            .bearer_auth(&self.token)
+            .auth(self.http.post(format!("{}/images", self.base_url)))
             .header("content-type", "application/octet-stream")
             .body(bytes)
             .send()
@@ -162,9 +183,7 @@ impl Client {
     pub async fn get(&self, id: impl AsRef<str>) -> Result<ImageInfo> {
         let id = checked_id(id.as_ref())?;
         let res = self
-            .http
-            .get(format!("{}/images/{id}/info", self.base_url))
-            .bearer_auth(&self.token)
+            .auth(self.http.get(format!("{}/images/{id}/info", self.base_url)))
             .send()
             .await?;
         Ok(check(res).await?.json().await?)
@@ -185,7 +204,7 @@ impl Client {
         if !query.is_empty() {
             url = format!("{url}?{query}");
         }
-        let res = check(self.http.get(url).bearer_auth(&self.token).send().await?).await?;
+        let res = check(self.auth(self.http.get(url)).send().await?).await?;
         let content_type = res
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -202,9 +221,7 @@ impl Client {
     pub async fn delete(&self, id: impl AsRef<str>) -> Result<()> {
         let id = checked_id(id.as_ref())?;
         let res = self
-            .http
-            .delete(format!("{}/images/{id}", self.base_url))
-            .bearer_auth(&self.token)
+            .auth(self.http.delete(format!("{}/images/{id}", self.base_url)))
             .send()
             .await?;
         check(res).await?;
@@ -219,9 +236,7 @@ impl Client {
     ) -> Result<Vec<u8>> {
         let query = transform.borrow().to_query();
         let res = self
-            .http
-            .post(format!("{}/convert?{query}", self.base_url))
-            .bearer_auth(&self.token)
+            .auth(self.http.post(format!("{}/convert?{query}", self.base_url)))
             .header("content-type", "application/octet-stream")
             .body(bytes)
             .send()
@@ -230,16 +245,24 @@ impl Client {
     }
 
     /// Builds a signed URL for an image. No network call is made.
+    ///
+    /// An [unauthenticated](Client::unauthenticated) client has no signing
+    /// key, so it returns a plain URL instead.
     pub fn url(&self, id: impl AsRef<str>, transform: impl Borrow<Transform>) -> Result<String> {
         let id = checked_id(id.as_ref())?;
         let transform = transform.borrow();
+        let Some(signing_key) = &self.signing_key else {
+            let query = transform.to_query();
+            let sep = if query.is_empty() { "" } else { "?" };
+            return Ok(format!("{}/images/{id}{sep}{query}", self.base_url));
+        };
         let ttl = transform.expiry().unwrap_or(self.url_ttl);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
         let exp = (now + ttl).as_secs();
         let query = transform.to_query();
-        let sig = signing::sign(&self.signing_key, id, &query, exp);
+        let sig = signing::sign(signing_key, id, &query, exp);
         let sep = if query.is_empty() { "" } else { "&" };
         Ok(format!(
             "{}/images/{id}?{query}{sep}exp={exp}&sig={sig}",
@@ -314,6 +337,12 @@ static GLOBAL: OnceLock<Client> = OnceLock::new();
 /// and `ANSEL_API_TOKEN` from the environment instead.
 pub fn setup(url: impl Into<String>, token: impl Into<String>) -> Result<()> {
     install(Client::new(url, token)?)
+}
+
+/// Configures the global client for a server that doesn't require a token
+/// (`ANSEL_REQUIRE_API_TOKEN=false`). See [`Client::unauthenticated`].
+pub fn setup_unauthenticated(url: impl Into<String>) -> Result<()> {
+    install(Client::unauthenticated(url)?)
 }
 
 /// Installs a fully configured [`Client`] as the global client.
@@ -405,6 +434,20 @@ mod tests {
 
         let plain = c.url(id, Transform::new()).unwrap();
         assert!(plain.contains(&format!("{id}?exp=")));
+    }
+
+    #[test]
+    fn unauthenticated_client_builds_plain_urls() {
+        let c = Client::unauthenticated("http://ansel.railway.internal:8080").unwrap();
+        let id = "01JD8Z6Q4M3V9K2T7XW5R8N0PB";
+        assert_eq!(
+            c.url(id, Transform::new().width(400)).unwrap(),
+            format!("http://ansel.railway.internal:8080/images/{id}?w=400")
+        );
+        assert_eq!(
+            c.url(id, Transform::new()).unwrap(),
+            format!("http://ansel.railway.internal:8080/images/{id}")
+        );
     }
 
     #[test]

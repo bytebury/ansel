@@ -65,6 +65,20 @@ That's all the setup. Ansel refuses to start if `ANSEL_API_TOKEN` is missing
 or shorter than 32 characters, so a misconfigured deploy never runs without
 authentication.
 
+### Private network only (no token)
+
+If only your other Railway services call ansel, you can skip the token. Leave
+the service without a public domain and set:
+
+```sh
+ANSEL_REQUIRE_API_TOKEN=false
+```
+
+Your app then reaches ansel at its private address, such as
+`http://ansel.railway.internal:8080`, with `ansel::setup_unauthenticated` (or
+with `ANSEL_URL` alone). Ansel refuses to run without a token if the service
+has a public domain, so it can't be exposed to the internet by accident.
+
 Railway buckets are private, and ansel keeps it that way. Images are served
 through ansel with signed URLs (see [Security](#security)). The bucket never
 needs public access.
@@ -89,8 +103,12 @@ println!("{}", image.id);      // "01JD8Z6Q4M3V9K2T7XW5R8N0PB"
 println!("{}x{}", image.width, image.height);
 ```
 
+For a server running with `ANSEL_REQUIRE_API_TOKEN=false`, use
+`ansel::setup_unauthenticated("http://ansel.railway.internal:8080")` instead.
+
 You can also skip `setup()`. On first use, the SDK reads `ANSEL_URL` and
-`ANSEL_API_TOKEN` from the environment:
+`ANSEL_API_TOKEN` from the environment. Without `ANSEL_API_TOKEN`, it doesn't
+send a token:
 
 ```rust
 let image = ansel::upload(bytes).await?; // reads ANSEL_URL / ANSEL_API_TOKEN
@@ -200,7 +218,8 @@ browser's.
 
 All endpoints except `GET /health` require authentication. Send the token from
 `ANSEL_API_TOKEN` as `Authorization: Bearer <token>`. `GET /images/{id}` also
-accepts a signed URL in place of the token.
+accepts a signed URL in place of the token. With
+`ANSEL_REQUIRE_API_TOKEN=false`, no endpoint needs a token or a signature.
 
 ### `POST /images`: upload
 
@@ -333,6 +352,11 @@ shouldn't need to change any of them for a typical deployment.
 - **The token is required, and must be strong.** The server won't start
   without an `ANSEL_API_TOKEN` of at least 32 characters. It compares tokens
   in constant time.
+- **Turning the token off is explicit.** `ANSEL_REQUIRE_API_TOKEN=false` is
+  for servers that are only reachable over a private network. A missing token
+  never turns authentication off by itself. On Railway, ansel refuses to run
+  without a token if the service has a public domain, and it logs a warning
+  at startup whenever authentication is off.
 - **Image URLs are signed.** A `GET /images/{id}` request without a token must
   include `exp` and `sig`. `sig` is an HMAC-SHA256 over the image ID, the
   transform parameters, and the expiry time. Without it, anyone could request
@@ -391,11 +415,12 @@ Everything is configured through environment variables. For local
 development, put them in a `.env` file. `dev.sh` creates a template on first
 run, and `.env` is gitignored.
 
-### Required
+### Authentication
 
-| Variable          | Purpose                                                                           |
-| ----------------- | --------------------------------------------------------------------------------- |
-| `ANSEL_API_TOKEN` | Shared secret for the API, at least 32 characters. Also the default signing key.  |
+| Variable                  | Default  | Purpose                                                                                       |
+| ------------------------- | -------- | --------------------------------------------------------------------------------------------- |
+| `ANSEL_API_TOKEN`         | —        | Shared secret for the API, at least 32 characters. Also the default signing key. Required unless `ANSEL_REQUIRE_API_TOKEN=false`. |
+| `ANSEL_REQUIRE_API_TOKEN` | `true`   | Set to `false` to turn authentication off, for a server only reachable over a private network. Refused when Railway reports a public domain (`RAILWAY_PUBLIC_DOMAIN`). |
 
 ### Storage
 
@@ -441,7 +466,7 @@ any of these by hand.
 | Variable          | Purpose                                                                                 |
 | ----------------- | --------------------------------------------------------------------------------------- |
 | `ANSEL_URL`       | Base URL of your ansel server.                                                          |
-| `ANSEL_API_TOKEN` | The same token the server uses. The SDK also derives the URL signing key from it.       |
+| `ANSEL_API_TOKEN` | The same token the server uses. The SDK also derives the URL signing key from it. Leave it unset for a server with `ANSEL_REQUIRE_API_TOKEN=false`. |
 | `ANSEL_SIGNING_KEY` | Set this only if the server sets it.                                                  |
 | `ANSEL_URL_TTL`   | Lifetime of signed URLs in seconds. Defaults to `604800` (7 days).                      |
 
