@@ -12,8 +12,7 @@ An image upload, editing, and conversion microservice written in Rust, named
 after the photographer Ansel Adams. It is built on
 [axum](https://github.com/tokio-rs/axum) and [image](https://github.com/image-rs/image).
 
-Ansel follows the same pattern as [mailman](https://github.com/bytebury/mailman)
-and [geodude](https://github.com/bytebury/geodude):
+Ansel comes in two parts:
 
 - an **HTTP microservice** that holds your storage credentials, checks every
   upload, and resizes and converts images on request, and
