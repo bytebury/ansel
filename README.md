@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/ansel.png" alt="ansel: a crab in a sun hat holding a camera" width="200">
+  <img src="assets/ansel.svg" alt="ansel: a crab in a sun hat holding a camera" width="200">
 </p>
 
 <h1 align="center">ansel</h1>
