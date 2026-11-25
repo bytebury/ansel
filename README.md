@@ -51,11 +51,15 @@ without any storage configuration.
 3. **Connect the bucket** to the ansel service. Railway adds the bucket's
    variables (`BUCKET`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`, `REGION`,
    `ENDPOINT`) to the service, and ansel reads them as they are.
-4. **Add one secret** to the service's **Variables** tab:
+4. **Add one secret.** Generate a token in your terminal:
 
    ```sh
-   ANSEL_API_TOKEN=$(openssl rand -hex 32)
+   openssl rand -hex 32
    ```
+
+   In the service's **Variables** tab, add `ANSEL_API_TOKEN` and paste the
+   64-character output as its value. Paste the output, not the command:
+   Railway stores variable values as they are, without running them.
 
 That's all the setup. Ansel refuses to start if `ANSEL_API_TOKEN` is missing
 or shorter than 32 characters, so a misconfigured deploy never runs without

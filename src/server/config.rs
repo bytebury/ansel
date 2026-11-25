@@ -62,6 +62,14 @@ impl Config {
             "ANSEL_API_TOKEN is not set. Generate one with `openssl rand -hex 32` and add it to \
              the service's variables.",
         )?;
+        if token.contains("$(") || token.contains("${") || token.contains('`') {
+            return Err(
+                "ANSEL_API_TOKEN contains a shell command instead of a token. Variables aren't \
+                 run through a shell, so run `openssl rand -hex 32` in a terminal and paste its \
+                 output as the value."
+                    .into(),
+            );
+        }
         if token.len() < MIN_TOKEN_LEN {
             return Err(format!(
                 "ANSEL_API_TOKEN must be at least {MIN_TOKEN_LEN} characters (it is {}). Generate \
