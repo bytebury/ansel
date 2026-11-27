@@ -87,7 +87,7 @@ needs public access.
 
 ```toml
 [dependencies]
-ansel = "0.1"  # client by default; no need to disable anything
+ansel = "0.2"  # client by default; no need to disable anything
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -251,6 +251,26 @@ rotates it upright from its EXIF orientation, and re-encodes it before storing
 it. Re-encoding removes all metadata, including GPS location (see
 [Security](#security)).
 
+#### Videos
+
+MP4 videos are uploaded the same way, and share the `ANSEL_MAX_UPLOAD_BYTES`
+limit (20 MiB by default):
+
+```sh
+curl -X POST https://ansel.example.com/images \
+  -H "Authorization: Bearer $ANSEL_API_TOKEN" \
+  -F "file=@clip.mp4"
+```
+
+The response has `"format": "mp4"`, and `width` and `height` are the display
+size of the first video track. Ansel checks the file's MP4 structure and that
+it has a video track, then stores it byte for byte: videos aren't re-encoded,
+so their metadata (which can include GPS location) is kept. Videos can't be
+transformed or sent to `POST /convert`. Fetch one without parameters, using a
+token or a signed URL, and use it as a `<video src>`. Fetches of originals
+support `Range` requests, so browsers can stream and seek. To turn videos off,
+set `ANSEL_ALLOWED_FORMATS` without `mp4`.
+
 ### `GET /images/{id}`: fetch, optionally transformed
 
 ```sh
@@ -258,7 +278,8 @@ curl -H "Authorization: Bearer $ANSEL_API_TOKEN" \
   "https://ansel.example.com/images/01JD8Z6Q4M3V9K2T7XW5R8N0PB?w=800&fmt=webp" -o out.webp
 ```
 
-Without query parameters, this returns the stored original. With
+Without query parameters, this returns the stored original (and honors a
+`Range` header). With
 [transform parameters](#transforms), the first request renders the variant and
 caches it in the bucket. Later requests are served from that cache.
 
@@ -298,12 +319,13 @@ Errors return `{ "error": "..." }` with one of these status codes:
 
 | Status | Meaning                                                                  |
 | ------ | ------------------------------------------------------------------------ |
-| `400`  | Invalid transform parameters.                                            |
+| `400`  | Invalid transform parameters, or a transform requested for a video.      |
 | `401`  | Missing or wrong token, or a bad or expired signature.                   |
 | `404`  | No image with that ID.                                                   |
 | `413`  | Upload is larger than `ANSEL_MAX_UPLOAD_BYTES` or `ANSEL_MAX_PIXELS`.    |
-| `415`  | Not an image, or a format that isn't allowed.                            |
-| `422`  | The file claims to be an image but can't be decoded.                     |
+| `415`  | Not an image or MP4, a format that isn't allowed, or a video sent to `/convert`. |
+| `416`  | The `Range` header is outside the file.                                  |
+| `422`  | The file claims to be an image or MP4 but can't be read.                 |
 | `502`  | The storage backend failed.                                              |
 | `503`  | The request took longer than `ANSEL_REQUEST_TIMEOUT`.                    |
 
@@ -333,7 +355,8 @@ They run in this order: **crop → resize → rotate/flip → adjust → encode*
 | `q`      | `1`–`100`                                  | `82`            | Quality for lossy formats (JPEG, WebP, AVIF). PNG and GIF ignore it.      |
 | `preset` | a name from `ANSEL_PRESETS`                | —               | A named set of the parameters above. Can't be combined with them.         |
 
-**Input formats:** JPEG, PNG, WebP, and GIF by default; TIFF and BMP can be
+**Input formats:** JPEG, PNG, WebP, and GIF by default (plus MP4 videos,
+which can't be transformed; see [Videos](#videos)); TIFF and BMP can be
 enabled with `ANSEL_ALLOWED_FORMATS`. Animated GIF and WebP uploads keep only
 their first frame. AVIF is an output format only (decoding it would need a
 native library). Ansel never accepts SVG, because SVG files can carry scripts
@@ -444,10 +467,10 @@ any of these by hand.
 
 | Variable                     | Default                         | Purpose                                                                      |
 | ---------------------------- | ------------------------------- | ---------------------------------------------------------------------------- |
-| `ANSEL_MAX_UPLOAD_BYTES`     | `20971520` (20 MiB)             | Largest request body accepted.                                               |
+| `ANSEL_MAX_UPLOAD_BYTES`     | `20971520` (20 MiB)             | Largest request body accepted, for images and videos alike.                  |
 | `ANSEL_MAX_PIXELS`           | `50000000` (50 MP)              | Largest decoded image (width × height). Protects against decompression bombs. |
 | `ANSEL_MAX_OUTPUT_DIMENSION` | `4096`                          | Largest `w` or `h` a transform can produce (at most `16383`).                |
-| `ANSEL_ALLOWED_FORMATS`      | `jpeg,png,webp,gif`             | Input formats accepted on upload. `tiff` and `bmp` can be added.             |
+| `ANSEL_ALLOWED_FORMATS`      | `jpeg,png,webp,gif,mp4`         | Input formats accepted on upload. `tiff` and `bmp` can be added; leave out `mp4` to refuse videos. |
 | `ANSEL_DEFAULT_QUALITY`      | `82`                            | Quality used when a transform doesn't set `q`.                               |
 | `ANSEL_STORE_FORMAT`         | `original`                      | Format originals are stored in: `original` or `webp`. TIFF and BMP are stored as PNG. |
 | `ANSEL_STRIP_METADATA`       | `true`                          | Re-encode uploads, removing EXIF, XMP, IPTC, and GPS data. When `false`, files are stored byte for byte (they're still fully decoded to validate them). |

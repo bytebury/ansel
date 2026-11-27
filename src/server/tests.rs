@@ -41,6 +41,7 @@ fn config(root: PathBuf) -> Config {
             ImageFormat::WebP,
             ImageFormat::Gif,
         ],
+        allow_video: true,
         default_quality: 82,
         store_format: StoreFormat::Original,
         strip_metadata: true,
@@ -548,4 +549,85 @@ async fn token_can_be_turned_off() {
         client.get(&info.id).await,
         Err(ansel::Error::Api { status: 404, .. })
     ));
+}
+
+#[tokio::test]
+async fn videos_are_stored_as_is_and_streamed() {
+    let s = start(|_| {}).await;
+    let mp4 = super::video::test_mp4(b"vide", 1280, 720);
+    let info = s.client.upload(mp4.clone()).await.unwrap();
+    assert_eq!(
+        (info.format, info.width, info.height, info.bytes),
+        (Format::Mp4, 1280, 720, mp4.len() as u64)
+    );
+
+    let url = s.client.url(&info.id, Transform::new()).unwrap();
+    let res = reqwest::get(&url).await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["content-type"], "video/mp4");
+    assert_eq!(res.headers()["accept-ranges"], "bytes");
+    assert_eq!(res.bytes().await.unwrap(), mp4);
+
+    // Range requests, so browsers can seek.
+    let http = reqwest::Client::new();
+    let res = http
+        .get(&url)
+        .header("range", "bytes=4-11")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 206);
+    assert_eq!(
+        res.headers()["content-range"],
+        format!("bytes 4-11/{}", mp4.len()).as_str()
+    );
+    assert_eq!(res.bytes().await.unwrap(), &mp4[4..12]);
+    let res = http
+        .get(&url)
+        .header("range", "bytes=-5")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.bytes().await.unwrap(), &mp4[mp4.len() - 5..]);
+    let res = http
+        .get(&url)
+        .header("range", format!("bytes={}-", mp4.len()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 416);
+
+    // Videos can't be transformed or converted.
+    let resized = s.client.url(&info.id, Transform::new().width(100)).unwrap();
+    assert_eq!(reqwest::get(&resized).await.unwrap().status(), 400);
+    let err = s
+        .client
+        .convert(mp4.clone(), Transform::new().width(10))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, ansel::Error::Api { status: 415, .. }),
+        "{err}"
+    );
+
+    s.client.delete(&info.id).await.unwrap();
+    assert!(s.client.get(&info.id).await.is_err());
+}
+
+#[tokio::test]
+async fn video_limits_and_validation() {
+    let s = start(|c| c.max_upload_bytes = 1024).await;
+    let api_status = |r: ansel::Result<ansel::ImageInfo>| match r {
+        Err(ansel::Error::Api { status, .. }) => status,
+        other => panic!("expected an API error, got {other:?}"),
+    };
+    let mut big = super::video::test_mp4(b"vide", 64, 64);
+    big.extend(std::iter::repeat_n(0u8, 2048));
+    assert_eq!(api_status(s.client.upload(big).await), 413);
+    let audio = super::video::test_mp4(b"soun", 0, 0);
+    assert_eq!(api_status(s.client.upload(audio).await), 422);
+
+    let s = start(|c| c.allow_video = false).await;
+    let mp4 = super::video::test_mp4(b"vide", 64, 64);
+    assert_eq!(api_status(s.client.upload(mp4).await), 415);
 }

@@ -16,6 +16,7 @@ use super::config::{Config, StoreFormat};
 use super::error::ApiError;
 use super::ids;
 use super::imaging;
+use super::video;
 
 /// Quality used when re-encoding uploaded originals.
 const ORIGINAL_QUALITY: u8 = 92;
@@ -77,10 +78,10 @@ pub async fn upload(
     _: Authenticated,
     req: Request,
 ) -> Result<Response, ApiError> {
-    let bytes = read_image_body(&state.config, req).await?;
+    let bytes = read_body(&state.config, req).await?;
     let config = state.config.clone();
     let (stored, format, width, height) = state
-        .process(move || prepare_original(&bytes, &config))
+        .process(move || prepare_original(bytes, &config))
         .await?;
 
     let id = ids::new_id();
@@ -105,15 +106,26 @@ pub async fn upload(
         .await
         .map_err(ApiError::storage)?;
 
-    tracing::info!(%id, %format, width, height, bytes = info.bytes, "stored image");
+    tracing::info!(%id, %format, width, height, bytes = info.bytes, "stored upload");
     Ok((StatusCode::CREATED, no_store(), Json(info)).into_response())
 }
 
 /// Validates an upload and produces the bytes to store.
 fn prepare_original(
-    bytes: &[u8],
+    bytes: Bytes,
     config: &Config,
 ) -> Result<(Vec<u8>, Format, u32, u32), ApiError> {
+    if video::is_mp4(&bytes) {
+        if !config.allow_video {
+            return Err(ApiError::unsupported(
+                "mp4 videos aren't allowed on this server",
+            ));
+        }
+        // Videos are stored byte for byte; their metadata is kept.
+        let (width, height) = video::probe(&bytes)?;
+        return Ok((Vec::from(bytes), Format::Mp4, width, height));
+    }
+    let bytes = &bytes[..];
     let (image, source) = imaging::decode(bytes, &config.allowed_formats, config.max_pixels)?;
     let (width, height) = (image.width(), image.height());
     let format = match config.store_format {
@@ -213,6 +225,11 @@ pub async fn fetch(
     let transform = resolve_preset(config, requested)?;
     validate(config, &transform)?;
     let info = state.load_info(&id).await?;
+    if info.format.is_video() && !transform.is_empty() {
+        return Err(ApiError::bad_request(
+            "videos can't be transformed; request them without parameters",
+        ));
+    }
 
     let cache_control = match access {
         Access::Token => format!("private, max-age={ONE_YEAR}, immutable"),
@@ -225,13 +242,7 @@ pub async fn fetch(
     };
 
     if transform.is_empty() {
-        let bytes = state
-            .storage
-            .get(&state.original_key(&id))
-            .await
-            .map_err(ApiError::storage)?
-            .ok_or_else(ApiError::not_found)?;
-        return Ok(image_response(bytes, info.format, &cache_control, false));
+        return original_response(&state, &info, &cache_control, &headers).await;
     }
 
     let negotiated = transform.format == Some(Format::Auto);
@@ -296,7 +307,12 @@ pub async fn convert(
     }
     let transform = resolve_preset(&state.config, requested)?;
     validate(&state.config, &transform)?;
-    let bytes = read_image_body(&state.config, req).await?;
+    let bytes = read_body(&state.config, req).await?;
+    if video::is_mp4(&bytes) {
+        return Err(ApiError::unsupported(
+            "videos can't be converted; upload them with POST /images",
+        ));
+    }
 
     let config = state.config.clone();
     let negotiated = transform.format == Some(Format::Auto);
@@ -381,9 +397,9 @@ fn negotiate(headers: &HeaderMap, source: Format) -> Format {
     }
 }
 
-/// Reads an image from a `multipart/form-data` field named `file`, or from
+/// Reads an upload from a `multipart/form-data` field named `file`, or from
 /// the raw request body.
-async fn read_image_body(config: &Config, req: Request) -> Result<Bytes, ApiError> {
+async fn read_body(config: &Config, req: Request) -> Result<Bytes, ApiError> {
     let is_multipart = req
         .headers()
         .get(header::CONTENT_TYPE)
@@ -429,8 +445,88 @@ async fn read_image_body(config: &Config, req: Request) -> Result<Bytes, ApiErro
     Ok(bytes)
 }
 
+/// Serves a stored original, honoring a single `Range: bytes=…` request so
+/// browsers can stream and seek videos.
+async fn original_response(
+    state: &AppState,
+    info: &ImageInfo,
+    cache_control: &str,
+    request: &HeaderMap,
+) -> Result<Response, ApiError> {
+    let bytes = state
+        .storage
+        .get(&state.original_key(&info.id))
+        .await
+        .map_err(ApiError::storage)?
+        .ok_or_else(ApiError::not_found)?;
+    let len = bytes.len() as u64;
+    let range = request
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| parse_range(v, len));
+    let mut response = match range {
+        None => image_response(bytes, info.format, cache_control, false),
+        Some(Ok((start, end))) => {
+            let body = Bytes::from(bytes).slice(start as usize..=end as usize);
+            let mut response = image_response(body, info.format, cache_control, false);
+            *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+            if let Ok(v) = HeaderValue::from_str(&format!("bytes {start}-{end}/{len}")) {
+                response.headers_mut().insert(header::CONTENT_RANGE, v);
+            }
+            response
+        }
+        Some(Err(())) => {
+            let mut response =
+                ApiError::new(StatusCode::RANGE_NOT_SATISFIABLE, "range not satisfiable")
+                    .into_response();
+            if let Ok(v) = HeaderValue::from_str(&format!("bytes */{len}")) {
+                response.headers_mut().insert(header::CONTENT_RANGE, v);
+            }
+            return Ok(response);
+        }
+    };
+    response
+        .headers_mut()
+        .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    Ok(response)
+}
+
+/// Parses a `Range` header against a body of `len` bytes into an inclusive
+/// byte range. `None` means "ignore it and send everything" (other units,
+/// multiple ranges, malformed values); `Some(Err)` means unsatisfiable.
+fn parse_range(value: &str, len: u64) -> Option<Result<(u64, u64), ()>> {
+    let spec = value.trim().strip_prefix("bytes=")?.trim();
+    if spec.contains(',') {
+        return None;
+    }
+    let (start, end) = spec.split_once('-')?;
+    let (start, end) = (start.trim(), end.trim());
+    if start.is_empty() {
+        // `bytes=-N`: the last N bytes.
+        let n: u64 = end.parse().ok()?;
+        if n == 0 || len == 0 {
+            return Some(Err(()));
+        }
+        return Some(Ok((len.saturating_sub(n), len - 1)));
+    }
+    let start: u64 = start.parse().ok()?;
+    let end = if end.is_empty() {
+        u64::MAX
+    } else {
+        end.parse().ok()?
+    };
+    if end < start {
+        // Syntactically invalid, so it's ignored rather than refused.
+        return None;
+    }
+    if start >= len {
+        return Some(Err(()));
+    }
+    Some(Ok((start, end.min(len - 1))))
+}
+
 fn image_response(
-    bytes: Vec<u8>,
+    bytes: impl Into<axum::body::Body>,
     format: Format,
     cache_control: &str,
     vary_accept: bool,
@@ -446,7 +542,7 @@ fn image_response(
     if vary_accept {
         headers.insert(header::VARY, HeaderValue::from_static("Accept"));
     }
-    (headers, bytes).into_response()
+    (headers, bytes.into()).into_response()
 }
 
 fn no_store() -> [(header::HeaderName, &'static str); 1] {

@@ -212,6 +212,7 @@ pub fn encode(image: &DynamicImage, format: Format, quality: u8) -> Result<Vec<u
         Format::WebP => return encode_webp(image, quality),
         Format::Avif => return encode_avif(image, quality),
         Format::Auto => return Err(ApiError::internal("`auto` reached the encoder unresolved")),
+        Format::Mp4 => return Err(ApiError::internal("a video reached the image encoder")),
     };
     result.map_err(|e| ApiError::unprocessable(format!("couldn't encode as {format}: {e}")))?;
     Ok(out)

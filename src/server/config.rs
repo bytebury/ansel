@@ -25,6 +25,8 @@ pub struct Config {
     pub max_pixels: u64,
     pub max_output_dimension: u32,
     pub allowed_formats: Vec<ImageFormat>,
+    /// Whether MP4 videos may be uploaded (`mp4` in `ANSEL_ALLOWED_FORMATS`).
+    pub allow_video: bool,
     pub default_quality: u8,
     pub store_format: StoreFormat,
     pub strip_metadata: bool,
@@ -99,6 +101,8 @@ impl Config {
             );
         }
 
+        let (allowed_formats, allow_video) = allowed_formats()?;
+
         let cpus = std::thread::available_parallelism().map_or(2, |n| n.get());
 
         Ok(Self {
@@ -109,7 +113,8 @@ impl Config {
             max_upload_bytes: parse("ANSEL_MAX_UPLOAD_BYTES", 20 * 1024 * 1024)?,
             max_pixels: parse("ANSEL_MAX_PIXELS", 50_000_000)?,
             max_output_dimension,
-            allowed_formats: allowed_formats()?,
+            allowed_formats,
+            allow_video,
             default_quality,
             store_format,
             strip_metadata: parse_bool("ANSEL_STRIP_METADATA", true)?,
@@ -237,29 +242,44 @@ fn key_prefix() -> Result<String, String> {
     }
 }
 
-fn allowed_formats() -> Result<Vec<ImageFormat>, String> {
+/// The image formats allowed on upload, and whether MP4 videos are.
+fn allowed_formats() -> Result<(Vec<ImageFormat>, bool), String> {
     let names = list("ANSEL_ALLOWED_FORMATS");
     let names = if names.is_empty() {
-        vec!["jpeg".into(), "png".into(), "webp".into(), "gif".into()]
+        vec![
+            "jpeg".into(),
+            "png".into(),
+            "webp".into(),
+            "gif".into(),
+            "mp4".into(),
+        ]
     } else {
         names
     };
-    names
-        .iter()
-        .map(|name| match name.to_ascii_lowercase().as_str() {
-            "jpeg" | "jpg" => Ok(ImageFormat::Jpeg),
-            "png" => Ok(ImageFormat::Png),
-            "webp" => Ok(ImageFormat::WebP),
-            "gif" => Ok(ImageFormat::Gif),
-            "tiff" | "tif" => Ok(ImageFormat::Tiff),
-            "bmp" => Ok(ImageFormat::Bmp),
-            "svg" => Err("SVG can't be allowed: SVG files can contain scripts".to_string()),
-            "avif" => Err(
-                "AVIF uploads aren't supported (AVIF is available as an output format)".to_string(),
-            ),
-            other => Err(format!("unknown format `{other}` in ANSEL_ALLOWED_FORMATS")),
-        })
-        .collect()
+    let mut formats = Vec::new();
+    let mut allow_video = false;
+    for name in &names {
+        formats.push(match name.to_ascii_lowercase().as_str() {
+            "jpeg" | "jpg" => ImageFormat::Jpeg,
+            "png" => ImageFormat::Png,
+            "webp" => ImageFormat::WebP,
+            "gif" => ImageFormat::Gif,
+            "tiff" | "tif" => ImageFormat::Tiff,
+            "bmp" => ImageFormat::Bmp,
+            "mp4" => {
+                allow_video = true;
+                continue;
+            }
+            "svg" => return Err("SVG can't be allowed: SVG files can contain scripts".into()),
+            "avif" => {
+                return Err(
+                    "AVIF uploads aren't supported (AVIF is available as an output format)".into(),
+                );
+            }
+            other => return Err(format!("unknown format `{other}` in ANSEL_ALLOWED_FORMATS")),
+        });
+    }
+    Ok((formats, allow_video))
 }
 
 /// Parses `thumb=w:200,h:200,fit:cover;hero=w:1600,fmt:auto`.

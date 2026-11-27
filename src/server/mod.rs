@@ -7,6 +7,7 @@ mod ids;
 mod imaging;
 mod routes;
 mod storage;
+mod video;
 
 use std::sync::Arc;
 
@@ -72,7 +73,12 @@ pub fn router(state: AppState) -> Router {
             CorsLayer::new()
                 .allow_origin(config.cors_origins.clone())
                 .allow_methods([Method::GET, Method::POST, Method::DELETE])
-                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::RANGE])
+                .expose_headers([
+                    header::ACCEPT_RANGES,
+                    header::CONTENT_RANGE,
+                    header::CONTENT_LENGTH,
+                ])
                 .max_age(std::time::Duration::from_secs(3600)),
         );
     }
