@@ -1,6 +1,6 @@
 [package]
 name = "ansel"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 description = "Image upload, editing, and conversion microservice, plus its Rust client SDK."
 license = "MIT"

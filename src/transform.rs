@@ -11,10 +11,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-/// An image format.
+/// The format of a stored file.
 ///
 /// [`Format::Auto`] is only meaningful as a transform output: the server picks
-/// AVIF or WebP from the request's `Accept` header.
+/// AVIF or WebP from the request's `Accept` header. [`Format::Mp4`] is a video:
+/// it's stored and served as uploaded, and can't be a transform output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
@@ -25,6 +26,7 @@ pub enum Format {
     Gif,
     Avif,
     Auto,
+    Mp4,
 }
 
 impl Format {
@@ -37,6 +39,7 @@ impl Format {
             Self::Gif => "gif",
             Self::Avif => "avif",
             Self::Auto => "auto",
+            Self::Mp4 => "mp4",
         }
     }
 
@@ -50,7 +53,13 @@ impl Format {
             Self::Gif => "image/gif",
             Self::Avif => "image/avif",
             Self::Auto => "application/octet-stream",
+            Self::Mp4 => "video/mp4",
         }
+    }
+
+    /// Whether the format is a video. Videos can't be transformed.
+    pub const fn is_video(self) -> bool {
+        matches!(self, Self::Mp4)
     }
 
     /// Whether the format takes a quality setting.
@@ -76,6 +85,7 @@ impl FromStr for Format {
             "gif" => Self::Gif,
             "avif" => Self::Avif,
             "auto" => Self::Auto,
+            "mp4" => Self::Mp4,
             _ => return Err(format!("unknown format `{s}`")),
         })
     }
@@ -403,7 +413,13 @@ impl Transform {
                     "true" => t.grayscale = true,
                     _ => return Err("gray must be `true` (or left out)".into()),
                 },
-                "fmt" => t.format = Some(v.parse()?),
+                "fmt" => {
+                    let format: Format = v.parse()?;
+                    if format.is_video() {
+                        return Err("images can't be converted to video".into());
+                    }
+                    t.format = Some(format);
+                }
                 "q" => {
                     let q: u8 = v.parse().map_err(|_| format!("invalid quality `{v}`"))?;
                     if !(1..=100).contains(&q) {
@@ -492,16 +508,18 @@ fn percent_decode(s: &str) -> Result<String, String> {
     String::from_utf8(out).map_err(|_| "query is not valid UTF-8".into())
 }
 
-/// Metadata about a stored image.
+/// Metadata about a stored image or video.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageInfo {
     /// The image's ID: a 26-character ULID.
     pub id: String,
-    /// The format the image is stored in.
+    /// The format the file is stored in. [`Format::Mp4`] for videos.
     pub format: Format,
+    /// Width in pixels. For a video, its first video track's display width.
     pub width: u32,
+    /// Height in pixels. For a video, its first video track's display height.
     pub height: u32,
-    /// Size of the stored image in bytes.
+    /// Size of the stored file in bytes.
     pub bytes: u64,
     /// Upload time, RFC 3339 in UTC.
     pub created_at: String,
@@ -566,6 +584,7 @@ mod tests {
             "blur=NaN",
             "blur=101",
             "fmt=svg",
+            "fmt=mp4",
             "fit=stretch",
             "crop=1,2,3",
             "crop=0,0,0,5",

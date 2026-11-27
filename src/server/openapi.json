@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "ansel",
-    "version": "0.1.1",
+    "version": "0.2.0",
     "description": "Image upload, editing, and conversion. Every endpoint except /health needs `Authorization: Bearer <ANSEL_API_TOKEN>`; GET /images/{id} also accepts a signed URL (`exp` and `sig`)."
   },
   "servers": [{ "url": "/" }],
@@ -17,7 +17,7 @@
         "required": ["id", "format", "width", "height", "bytes", "created_at"],
         "properties": {
           "id": { "type": "string", "example": "01JD8Z6Q4M3V9K2T7XW5R8N0PB" },
-          "format": { "type": "string", "enum": ["jpeg", "png", "webp", "gif"] },
+          "format": { "type": "string", "enum": ["jpeg", "png", "webp", "gif", "mp4"] },
           "width": { "type": "integer", "example": 4032 },
           "height": { "type": "integer", "example": 3024 },
           "bytes": { "type": "integer", "example": 2481930 },
@@ -62,8 +62,11 @@
     },
     "responses": {
       "Image": {
-        "description": "The image.",
-        "content": { "image/*": { "schema": { "type": "string", "format": "binary" } } }
+        "description": "The image, or an MP4 video.",
+        "content": {
+          "image/*": { "schema": { "type": "string", "format": "binary" } },
+          "video/mp4": { "schema": { "type": "string", "format": "binary" } }
+        }
       },
       "Error": {
         "description": "An error.",
@@ -81,7 +84,7 @@
     },
     "/images": {
       "post": {
-        "summary": "Upload an image",
+        "summary": "Upload an image or an MP4 video",
         "requestBody": { "$ref": "#/components/requestBodies/Image" },
         "responses": {
           "201": { "description": "Stored.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ImageInfo" } } } },
@@ -96,7 +99,8 @@
     },
     "/images/{id}": {
       "get": {
-        "summary": "Fetch an image, optionally transformed",
+        "summary": "Fetch an image (optionally transformed) or a video",
+        "description": "Videos are served as uploaded and can't be transformed. Originals support a single `Range: bytes=...` request.",
         "parameters": [
           { "$ref": "#/components/parameters/id" },
           { "$ref": "#/components/parameters/w" },

@@ -168,7 +168,7 @@ impl Client {
         self
     }
 
-    /// Uploads an image and returns its metadata.
+    /// Uploads an image or an MP4 video and returns its metadata.
     pub async fn upload(&self, bytes: impl Into<reqwest::Body>) -> Result<ImageInfo> {
         let res = self
             .auth(self.http.post(format!("{}/images", self.base_url)))
